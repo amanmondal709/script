@@ -1,4 +1,17 @@
 #!/usr/bin/env python3
+"""
+WAHO automation tool
+- DATA token login -> extracts AUTH token and saves both
+- Auto-validate / auto-refresh auth token
+- Show accounts
+- Claim eligible accounts (online >= 24h)
+- Lucky draw status
+- Lucky draw auto-spin
+- Menu + colored output
+Requires: requests, colorama
+Install: pip install requests colorama
+"""
+
 import os
 import json
 import time
@@ -8,7 +21,7 @@ import shutil
 import requests
 from colorama import Fore, Style, init
 
-# ----------------- CONFIG -----------------
+# Config
 TOKEN_FILE = "token.json"
 init(autoreset=True)
 
@@ -21,7 +34,7 @@ C_BAD   = Fore.RED
 C_INFO  = Fore.CYAN
 RESET   = Style.RESET_ALL
 
-# ----------------- HELPERS / BANNER -----------------
+# Helpers / banner
 def banner():
     os.system("clear")
     print(Fore.RED + " █████╗ ███╗   ███╗ █████╗ ███╗   ██╗")
@@ -33,24 +46,14 @@ def banner():
     print(C_INFO + "[!] This script is created for auto-claiming WAHO" + RESET)
     print()
 
-def rgb_color(r, g, b):
-    return f"\033[38;2;{r};{g};{b}m"
-
-def countdown_rgb(seconds):
-    # small colorful countdown for UX
-    colors = [(255,0,0),(0,255,0),(0,0,255)]
-    idx = 0
-    while seconds > 0:
-        mins, secs = divmod(seconds, 60)
-        timer = f"{mins:02d}:{secs:02d}"
-        r,g,b = colors[idx % len(colors)]
-        print(rgb_color(r,g,b) + timer + RESET, end="\r")
+def human_sleep(seconds):
+    # simple human-like wait with dot animation
+    for _ in range(seconds):
+        print(".", end="", flush=True)
         time.sleep(1)
-        seconds -= 1
-        idx += 1
-    print(" " * 30, end="\r")
+    print()
 
-# ----------------- NETWORK / IP -----------------
+# Network / IP
 def get_ip():
     try:
         r = requests.get("https://api.ipify.org/?format=json", timeout=6)
@@ -61,7 +64,7 @@ def get_ip():
 
 IP = get_ip()
 
-# ----------------- REQUEST HEADERS -----------------
+# Request headers
 DEFAULT_HEADERS = {
     "Host": "api.waho.pro",
     "accept": "application/json, text/plain, */*",
@@ -77,16 +80,8 @@ DEFAULT_HEADERS = {
     "accept-language": "en,en-US;q=0.9"
 }
 
-# ----------------- TOKEN FILE HANDLING -----------------
+# Token file handling
 def save_tokens(auth_token=None, data_token=None):
-    """
-    Save tokens to token.json. Both fields optional.
-    token.json structure:
-    {
-      "auth_token": "...",
-      "data_token": "..."   # optional, used to re-login automatically
-    }
-    """
     data = {}
     if os.path.exists(TOKEN_FILE):
         try:
@@ -111,11 +106,10 @@ def load_tokens():
     except:
         return None, None
 
-# ----------------- LOGIN / VALIDATION -----------------
+# Login / validation
 def login_with_data_token(data_token):
     """
-    Login using the DATA token (the long encoded string).
-    On success returns auth_token (real token) and also saves both tokens.
+    Login using DATA token (long string). Save auth and data tokens.
     """
     url = f"https://api.waho.pro/login/login?ip={IP}"
     headers = DEFAULT_HEADERS.copy()
@@ -141,23 +135,14 @@ def login_with_data_token(data_token):
         return None
 
 def load_or_obtain_tokens():
-    """
-    Load saved tokens. If missing auth, will ask for DATA token and login.
-    Returns auth_token (or None).
-    """
     auth, data = load_tokens()
     if auth:
         return auth
-    # if no auth token saved, ask user for DATA token and login
     print(C_INFO + "No saved auth token found. Paste your WAHO DATA token (the long string):" + RESET)
     data_token = input("> ").strip()
     return login_with_data_token(data_token)
 
 def get_info(auth_token):
-    """
-    Query member info to validate token and return useful info.
-    Raises exception on invalid token / non-200.
-    """
     url = f"https://api.waho.pro/member/index?token={auth_token}&ip={IP}"
     try:
         r = requests.post(url, headers=DEFAULT_HEADERS, data='{"httpRequestIndex":0,"httpRequestCount":0}', timeout=10)
@@ -166,7 +151,6 @@ def get_info(auth_token):
         raise RuntimeError(f"Request failed: {e}")
     if j.get("code") != 0:
         raise RuntimeError(f"Invalid token or error: {j.get('msg')}")
-    # data contains user_key, today_commission, money etc.
     data = j.get("data", {})
     user_key = data.get("user_key", "")
     today_commission = data.get("today_commission", 0)
@@ -175,9 +159,8 @@ def get_info(auth_token):
 
 def validate_auth_token(auth_token):
     """
-    Validate auth token; if invalid, attempt automatic re-login using saved data_token,
+    Validate auth token; if invalid, attempt auto re-login with saved DATA token,
     otherwise ask user to paste DATA token and login.
-    Returns a valid auth_token or None.
     """
     try:
         get_info(auth_token)
@@ -197,29 +180,19 @@ def validate_auth_token(auth_token):
     data_token = input("> ").strip()
     return login_with_data_token(data_token)
 
-# ----------------- ACCOUNTS / CLAIM -----------------
+# Accounts / claim
 def parse_online_time_to_hours(online_time_str):
-    """
-    Parse strings like:
-      - "27小时12分钟"
-      - "1天3小时12分钟"
-      - "3小时" or "12分钟"
-    Return the total hours as integer (floored).
-    """
     if not online_time_str:
         return 0
     s = str(online_time_str)
     days = 0
     hours = 0
-    # find days
     m = re.search(r"(\d+)\s*天", s)
     if m:
         days = int(m.group(1))
-    # find hours
     m2 = re.search(r"(\d+)\s*小时", s)
     if m2:
         hours = int(m2.group(1))
-    # if no Chinese but digits like "48h" or "48 hours"
     if days == 0 and hours == 0:
         m3 = re.search(r"(\d+)\s*h", s, re.I)
         if m3:
@@ -270,7 +243,6 @@ def claim_eligible_accounts(auth_token):
         if hours < 24:
             print(f"{C_BAD}[SKIP] {account_name} — Online {hours}h (<24h){RESET}")
             continue
-        # proceed to claim
         claim_url = f"https://api.waho.pro/Activity/ClaimOnlineRewards?token={auth_token}&ip={IP}"
         payload = json.dumps({"qr_id": qr_id, "httpRequestIndex": 0, "httpRequestCount": 0})
         try:
@@ -284,12 +256,84 @@ def claim_eligible_accounts(auth_token):
             print(C_OK + f"[CLAIMED] {account_name} → +{amount} 💵" + RESET)
         else:
             print(C_BAD + f"[FAILED] {account_name} → {j.get('msg', 'Unknown')}" + RESET)
-        # small randomized wait/countdown to look natural
         wait = random.randint(3, 6)
-        countdown_rgb(wait)
+        human_sleep(wait)
     print(C_OK + "\nAll done.\n" + RESET)
 
-# ----------------- MENU / MAIN -----------------
+# Lucky draw status
+def lucky_draw_status(auth_token):
+    url = f"https://api.waho.pro/Activity/LuckyDrawNum?token={auth_token}&ip={IP}"
+    payload = json.dumps({"httpRequestIndex": 0, "httpRequestCount": 0})
+    headers = DEFAULT_HEADERS.copy()
+    headers.update({"referer": "https://waho.pro/spin"})
+    try:
+        r = requests.post(url, headers=headers, data=payload, timeout=10)
+        j = r.json()
+    except Exception as e:
+        print(C_BAD + f"[!] Lucky Draw request failed: {e}" + RESET)
+        return
+    if j.get("code") != 0:
+        print(C_BAD + f"[!] Lucky Draw error: {j.get('msg')}" + RESET)
+        return
+    data = j.get("data", {})
+    spins_left = data.get("lucky_draw_num", 0)
+    earned_money = data.get("lucky_draw_money", 0)
+    print()
+    print(" LUCKY DRAW STATUS ".center(40, "="))
+    print(f"{C_INFO}Spins Left: {spins_left}{RESET}")
+    print(f"{C_MONEY}Total Lucky Money Earned: {earned_money}{RESET}")
+    print("=" * 40)
+    print()
+
+# Lucky draw auto-spin
+def lucky_draw_auto(auth_token):
+    print()
+    print(" AUTO LUCKY DRAW ".center(40, "="))
+    url_info = f"https://api.waho.pro/Activity/LuckyDrawNum?token={auth_token}&ip={IP}"
+    payload = json.dumps({"httpRequestIndex": 0, "httpRequestCount": 0})
+    headers = DEFAULT_HEADERS.copy()
+    headers.update({"referer": "https://waho.pro/spin"})
+    try:
+        r = requests.post(url_info, headers=headers, data=payload, timeout=10)
+        j = r.json()
+    except Exception as e:
+        print(C_BAD + f"[!] Failed to fetch lucky draw count: {e}" + RESET)
+        return
+    if j.get("code") != 0:
+        print(C_BAD + f"[!] Error: {j.get('msg')}" + RESET)
+        return
+    spins_left = j.get("data", {}).get("lucky_draw_num", 0)
+    total_money = 0.0
+    print(C_INFO + f"Spins Available: {spins_left}" + RESET)
+    print("=" * 40)
+    if spins_left <= 0:
+        print(C_BAD + "[!] No spins available." + RESET)
+        return
+    spin_url = f"https://api.waho.pro/Activity/LuckyDraw?token={auth_token}&ip={IP}"
+    for i in range(spins_left):
+        print(C_INFO + f"🎰 Spin {i+1}/{spins_left} ..." + RESET)
+        try:
+            r2 = requests.post(spin_url, headers=headers, data=payload, timeout=12)
+            j2 = r2.json()
+#            print(j2)
+        except Exception as e:
+            print(C_BAD + f"[!] Spin error: {e}" + RESET)
+            break
+        if j2.get("code") != 0:
+            print(C_BAD + f"[FAILED] {j2.get('msg', 'Unknown error')}" + RESET)
+            break
+        amount = j2.get("data", {}).get("lucky_draw_money", 0)
+        cur_num = j2.get("data", {}).get("cur_num", 0)
+        total_money += amount
+        print(C_OK + f"→ Reward: +{amount} 💵 | Remaining Spins: {int(spins_left)-int(i)}" + RESET)
+        human_sleep(random.randint(5, 6))
+    print()
+    print("=" * 40)
+    print(C_OK + f"TOTAL SPIN REWARD: +{total_money} 💵" + RESET)
+    print("=" * 40)
+    print()
+
+# Menu
 def update_data_token_interactive():
     print(C_INFO + "Paste your WAHO DATA token (long string) to login and save:" + RESET)
     dt = input("> ").strip()
@@ -304,17 +348,13 @@ def update_data_token_interactive():
 def menu_loop():
     while True:
         banner()
-        # load and validate tokens
         saved_auth, saved_data = load_tokens()
         if not saved_auth:
-            # attempt to obtain new auth by asking or using saved data
             auth = load_or_obtain_tokens()
         else:
             auth = validate_auth_token(saved_auth)
         if not auth:
-            print(C_BAD + "[!] Unable to obtain a valid auth token. Use option 3 to provide DATA token." + RESET)
-
-        # show user info if token valid
+            print(C_BAD + "[!] Unable to obtain a valid auth token. Use option 5 to provide DATA token." + RESET)
         if auth:
             try:
                 user_key, today_commission, total_balance = get_info(auth)
@@ -326,33 +366,45 @@ def menu_loop():
                 print(f"{C_ACC}Total balance: {total_balance}{RESET}")
             except Exception as e:
                 print(C_BAD + f"[!] Could not fetch user info: {e}" + RESET)
-
         print()
         print(" WAHO TOOL MENU ".center(40, "="))
         print(f"{C_ACC}1. Show all accounts{RESET}")
         print(f"{C_ACC}2. Claim all eligible accounts (>24h){RESET}")
-        print(f"{C_ACC}3. Update / Add DATA token (login){RESET}")
-        print(f"{C_ACC}4. Exit{RESET}")
-
+        print(f"{C_ACC}3. Lucky Draw Status{RESET}")
+        print(f"{C_ACC}4. Lucky Draw Auto Spin{RESET}")
+        print(f"{C_ACC}5. Update / Add DATA token (login){RESET}")
+        print(f"{C_ACC}6. Exit{RESET}")
         choice = input("\nENTER YOUR CHOICE → ").strip()
         if choice == "1":
             if auth:
                 show_accounts(auth)
             else:
-                print(C_BAD + "No valid auth token. Please update DATA token (option 3)." + RESET)
+                print(C_BAD + "No valid auth token. Please update DATA token (option 5)." + RESET)
             input("\nPress ENTER to return to menu...")
         elif choice == "2":
             if auth:
                 claim_eligible_accounts(auth)
             else:
-                print(C_BAD + "No valid auth token. Please update DATA token (option 3)." + RESET)
+                print(C_BAD + "No valid auth token. Please update DATA token (option 5)." + RESET)
             input("\nPress ENTER to return to menu...")
         elif choice == "3":
+            if auth:
+                lucky_draw_status(auth)
+            else:
+                print(C_BAD + "No valid auth token. Please update DATA token (option 5)." + RESET)
+            input("\nPress ENTER to return to menu...")
+        elif choice == "4":
+            if auth:
+                lucky_draw_auto(auth)
+            else:
+                print(C_BAD + "No valid auth token. Please update DATA token (option 5)." + RESET)
+            input("\nPress ENTER to return to menu...")
+        elif choice == "5":
             new_auth = update_data_token_interactive()
             if new_auth:
                 auth = new_auth
             input("\nPress ENTER to return to menu...")
-        elif choice == "4":
+        elif choice == "6":
             print(C_INFO + "Bye." + RESET)
             break
         else:
